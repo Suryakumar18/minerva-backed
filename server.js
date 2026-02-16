@@ -23,10 +23,9 @@ app.use(cors({
 
 // Rate limiting to prevent spam
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50 // limit each IP to 50 requests per windowMs
 });
-
 app.use('/api/admission', limiter);
 app.use('/api/contact', limiter);
 
@@ -761,5 +760,3 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: ${process.env.RECIPIENT_EMAIL}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
-
-
