@@ -8,10 +8,12 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
-require('dotenv').config();
 
 const app = express();
+
+// Trust proxy - required for rate limiting behind a proxy (like Render)
 app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 
@@ -24,7 +26,17 @@ app.use(cors({
 // Rate limiting to prevent spam
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50 // limit each IP to 50 requests per windowMs
+  max: 50, // limit each IP to 50 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  keyGenerator: (req) => {
+    // Custom key generator that works with proxy
+    return req.ip || req.connection.remoteAddress;
+  },
+  // Skip rate limiting for health checks
+  skip: (req) => {
+    return req.path === '/health';
+  }
 });
 app.use('/api/admission', limiter);
 app.use('/api/contact', limiter);
@@ -56,14 +68,14 @@ const upload = multer({
   }
 });
 
-// Create email transporter
+// Create email transporter with hardcoded credentials
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT),
-  secure: process.env.EMAIL_SECURE === 'true',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // true for 465, false for other ports
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
+    user: 'roobankr6@gmail.com',
+    pass: 'jvjkdwuhtmgvlldf'
   }
 });
 
@@ -72,7 +84,7 @@ transporter.verify((error, success) => {
   if (error) {
     console.error('Email configuration error:', error);
   } else {
-    console.log('Email server is ready to send messages');
+    console.log('✅ Email server is ready to send messages');
   }
 });
 
@@ -414,7 +426,7 @@ app.post('/api/contact', async (req, res) => {
   try {
     const { name, email, phone, message } = req.body;
     
-    console.log('Received contact form submission');
+    console.log('📞 Received contact form submission from:', name);
     
     // Validate required fields
     if (!name || !email || !phone || !message) {
@@ -433,8 +445,8 @@ app.post('/api/contact', async (req, res) => {
     
     // Prepare email options for admin notification
     const adminMailOptions = {
-      from: `"Minervaa School Website" <${process.env.EMAIL_USER}>`,
-      to: process.env.RECIPIENT_EMAIL,
+      from: '"Minervaa School Website" <roobankr6@gmail.com>',
+      to: 'suryareigns18@gmail.com',
       subject: `New Contact Form Message - ${name}`,
       html: `
         <!DOCTYPE html>
@@ -503,7 +515,7 @@ app.post('/api/contact', async (req, res) => {
     
     // Prepare auto-reply email for the user
     const userMailOptions = {
-      from: `"Minervaa Vidhya Mandhir School" <${process.env.EMAIL_USER}>`,
+      from: '"Minervaa Vidhya Mandhir School" <roobankr6@gmail.com>',
       to: email,
       subject: 'Thank You for Contacting Minervaa Vidhya Mandhir School',
       html: `
@@ -586,11 +598,11 @@ app.post('/api/contact', async (req, res) => {
     
     // Send email to admin
     await transporter.sendMail(adminMailOptions);
-    console.log(`Contact form admin notification sent for ${name}`);
+    console.log(`✅ Contact form admin notification sent for ${name}`);
     
     // Send auto-reply to user
     await transporter.sendMail(userMailOptions);
-    console.log(`Contact form auto-reply sent to ${email}`);
+    console.log(`✅ Contact form auto-reply sent to ${email}`);
     
     // Success response
     res.status(200).json({ 
@@ -599,7 +611,7 @@ app.post('/api/contact', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error processing contact form:', error);
+    console.error('❌ Error processing contact form:', error);
     
     res.status(500).json({ 
       error: 'Failed to send your message. Please try again or contact us directly by phone.' 
@@ -613,7 +625,7 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     const formData = req.body;
     const photoFile = req.file;
     
-    console.log('Received admission form submission');
+    console.log('📝 Received admission form submission for:', formData.childName);
     
     // Validate required fields
     const requiredFields = ['childName', 'dateOfBirth', 'sex', 'contactType', 'contactNumber', 'classAdmission', 'tcAttached', 'howKnow'];
@@ -630,8 +642,8 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     
     // Prepare email options
     const mailOptions = {
-      from: `"Minervaa School Admissions" <${process.env.EMAIL_USER}>`,
-      to: process.env.RECIPIENT_EMAIL,
+      from: '"Minervaa School Admissions" <roobankr6@gmail.com>',
+      to: 'suryareigns18@gmail.com',
       subject: `New Admission Enquiry - ${formData.childName}`,
       html: `
         <!DOCTYPE html>
@@ -706,7 +718,7 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     // Send email
     await transporter.sendMail(mailOptions);
     
-    console.log(`Admission form email sent successfully for ${formData.childName}`);
+    console.log(`✅ Admission form email sent successfully for ${formData.childName}`);
     
     // Success response
     res.status(200).json({ 
@@ -715,7 +727,7 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error processing admission form:', error);
+    console.error('❌ Error processing admission form:', error);
     
     res.status(500).json({ 
       error: 'Failed to process admission form. Please try again or contact us directly.' 
@@ -734,7 +746,7 @@ app.get('/health', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Global error:', err.stack);
+  console.error('❌ Global error:', err.stack);
   
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
@@ -753,10 +765,11 @@ app.use((req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 5000;
+const PORT = 5000;
 app.listen(PORT, () => {
+  console.log('🚀 ==================================');
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📧 Email configured for: ${process.env.EMAIL_USER}`);
-  console.log(`📨 Sending to: ${process.env.RECIPIENT_EMAIL}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📧 Email configured for: roobankr6@gmail.com`);
+  console.log(`📨 Sending to: suryareigns18@gmail.com`);
+  console.log('🚀 ==================================');
 });
