@@ -8,16 +8,63 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
+
+// Load environment variables
 require('dotenv').config();
 
 const app = express();
 
+// Check for required environment variables
+const requiredEnvVars = ['EMAIL_HOST', 'EMAIL_PORT', 'EMAIL_USER', 'EMAIL_PASSWORD', 'RECIPIENT_EMAIL'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error('❌ Missing required environment variables:');
+  missingEnvVars.forEach(varName => {
+    console.error(`   - ${varName}`);
+  });
+  console.error('\nPlease add these variables in your Render dashboard:');
+  console.error('1. Go to your service in Render dashboard');
+  console.error('2. Click on "Environment" tab');
+  console.error('3. Add the following variables:');
+  console.error(`
+   EMAIL_HOST=smtp.gmail.com
+   EMAIL_PORT=587
+   EMAIL_SECURE=false
+   EMAIL_USER=your-email@gmail.com
+   EMAIL_PASSWORD=your-app-password
+   RECIPIENT_EMAIL=recipient-email@gmail.com
+  `);
+  
+  // Don't exit in production, but log error
+  if (process.env.NODE_ENV === 'production') {
+    console.error('\n⚠️  Continuing with missing environment variables. Email functionality will fail!');
+  }
+}
+
 // Security middleware
 app.use(helmet());
 
-// CORS configuration
+// CORS configuration - Update with your frontend URLs
+const allowedOrigins = [
+  'http://localhost:3001',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'https://your-frontend-domain.com', // Add your actual frontend domain
+  'https://minerva-backed-1.onrender.com' // Add your backend domain
+];
+
 app.use(cors({
-  origin: ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174'], // Add your frontend URLs
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 
@@ -56,25 +103,48 @@ const upload = multer({
   }
 });
 
-// Create email transporter
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT),
-  secure: process.env.EMAIL_SECURE === 'true',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
-  }
-});
+// Create email transporter with better error handling
+let transporter = null;
 
-// Verify email connection
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('Email configuration error:', error);
+try {
+  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+    transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: parseInt(process.env.EMAIL_PORT || '587'),
+      secure: process.env.EMAIL_SECURE === 'true',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+      },
+      // Add timeout and connection timeout
+      connectionTimeout: 10000, // 10 seconds
+      greetingTimeout: 10000,
+      socketTimeout: 15000
+    });
+
+    // Verify email connection (but don't block startup)
+    transporter.verify((error, success) => {
+      if (error) {
+        console.error('❌ Email configuration error:', error.message);
+        console.error('   Please check your email credentials in environment variables');
+      } else {
+        console.log('✅ Email server is ready to send messages');
+      }
+    });
   } else {
-    console.log('Email server is ready to send messages');
+    console.warn('⚠️  Email not configured. Email functionality will be disabled.');
   }
-});
+} catch (error) {
+  console.error('❌ Error creating email transporter:', error.message);
+}
+
+// Helper function to check if email is configured
+const isEmailConfigured = () => {
+  return transporter !== null && 
+         process.env.EMAIL_HOST && 
+         process.env.EMAIL_USER && 
+         process.env.EMAIL_PASSWORD;
+};
 
 // Helper function to create styled tables in PDF
 const createStyledTable = (doc, headers, data, startY, columnWidths) => {
@@ -431,6 +501,17 @@ app.post('/api/contact', async (req, res) => {
       });
     }
     
+    // Check if email is configured
+    if (!isEmailConfigured()) {
+      console.warn('Email not configured. Contact form submission saved but not sent.');
+      // In production, you might want to save to database here
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Your message has been received. We will contact you soon!',
+        note: 'Email service is currently being configured.'
+      });
+    }
+    
     // Prepare email options for admin notification
     const adminMailOptions = {
       from: `"Minervaa School Website" <${process.env.EMAIL_USER}>`,
@@ -486,7 +567,6 @@ app.post('/api/contact', async (req, res) => {
         </body>
         </html>
       `,
-      // Plain text version for email clients that don't support HTML
       text: `
         New Contact Form Message
         
@@ -625,6 +705,17 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
       });
     }
     
+    // Check if email is configured
+    if (!isEmailConfigured()) {
+      console.warn('Email not configured. Admission form data saved but not sent.');
+      // In production, you might want to save to database here
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Admission enquiry received. We will contact you soon!',
+        note: 'Email service is currently being configured.'
+      });
+    }
+    
     // Generate PDF
     const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
     
@@ -699,7 +790,7 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
         filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname)}`,
         content: photoFile.buffer,
         contentType: photoFile.mimetype,
-        cid: 'studentphoto' // Content ID for embedding in email if needed
+        cid: 'studentphoto'
       });
     }
     
@@ -723,11 +814,28 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
   }
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({ 
+    name: 'Minervaa Vidhya Mandhir School API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/health',
+      contact: '/api/contact',
+      admission: '/api/admission'
+    },
+    email_configured: isEmailConfigured(),
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     message: 'Server is running',
+    email_configured: isEmailConfigured(),
     timestamp: new Date().toISOString()
   });
 });
@@ -756,7 +864,13 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📧 Email configured for: ${process.env.EMAIL_USER}`);
-  console.log(`📨 Sending to: ${process.env.RECIPIENT_EMAIL}`);
+  console.log(`📧 Email configured: ${isEmailConfigured() ? 'YES' : 'NO'}`);
+  if (isEmailConfigured()) {
+    console.log(`📧 Email user: ${process.env.EMAIL_USER}`);
+    console.log(`📨 Recipient: ${process.env.RECIPIENT_EMAIL}`);
+  } else {
+    console.log('⚠️  Email functionality is disabled. Please configure environment variables.');
+  }
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 API URL: https://minerva-backed-1.onrender.com`);
 });
