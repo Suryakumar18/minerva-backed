@@ -11,7 +11,7 @@ const path = require('path');
 require('dotenv').config();
 
 const app = express();
-
+app.set('trust proxy', true);
 // Security middleware
 app.use(helmet());
 
@@ -760,3 +760,4 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: ${process.env.RECIPIENT_EMAIL}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
+
