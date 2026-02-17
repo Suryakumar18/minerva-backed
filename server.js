@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
+const os = require('os');
 
 const app = express();
 
@@ -71,12 +72,14 @@ const upload = multer({
 });
 
 // =============================================
-// EMAIL CONFIGURATION WITH MULTIPLE FALLBACKS
+// FIXED EMAIL CONFIGURATION
 // =============================================
 
-// Try different SMTP configurations
+// Get hostname for EHLO
+const hostname = os.hostname().replace(/[^a-zA-Z0-9.-]/g, '') || 'localhost';
+
 const emailConfigs = [
-    // Config 1: Gmail with 587 (TLS)
+    // Config 1: Gmail with 587 (TLS) - FIXED EHLO
     {
         name: 'Gmail 587',
         host: 'smtp.gmail.com',
@@ -89,9 +92,11 @@ const emailConfigs = [
         tls: {
             rejectUnauthorized: false,
             ciphers: 'SSLv3'
-        }
+        },
+        // Add proper name for EHLO
+        name: hostname
     },
-    // Config 2: Gmail with 465 (SSL)
+    // Config 2: Gmail with 465 (SSL) - FIXED EHLO
     {
         name: 'Gmail 465',
         host: 'smtp.gmail.com',
@@ -103,56 +108,45 @@ const emailConfigs = [
         },
         tls: {
             rejectUnauthorized: false
-        }
-    },
-    // Config 3: Gmail with 25 (if allowed)
-    {
-        name: 'Gmail 25',
-        host: 'smtp.gmail.com',
-        port: 25,
-        secure: false,
-        auth: {
-            user: 'roobankr6@gmail.com',
-            pass: 'jvjkdwuhtmgvlldf'
         },
-        tls: {
-            rejectUnauthorized: false
-        }
+        // Add proper name for EHLO
+        name: hostname
     }
 ];
 
 let transporter = null;
 let activeConfig = null;
 
-// Function to create transporter with timeout
+// Function to create transporter with proper EHLO
 const createTransporter = (config) => {
     return nodemailer.createTransport({
-        ...config,
-        connectionTimeout: 30000, // 30 seconds
+        host: config.host,
+        port: config.port,
+        secure: config.secure,
+        auth: config.auth,
+        tls: config.tls,
+        name: hostname, // Critical fix for EHLO
+        localAddress: undefined,
+        connectionTimeout: 30000,
         greetingTimeout: 30000,
         socketTimeout: 30000,
         debug: true,
         logger: true,
-        pool: false // Disable pooling for testing
+        pool: false
     });
 };
 
 // Try to connect with each configuration
 const findWorkingConfig = async () => {
-    console.log('🔍 Testing email configurations...');
+    console.log('🔍 Testing email configurations with hostname:', hostname);
     
     for (const config of emailConfigs) {
         try {
             console.log(`Testing ${config.name}...`);
             const testTransporter = createTransporter(config);
             
-            // Test with a shorter timeout
-            const verifyPromise = testTransporter.verify();
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Verification timeout')), 10000);
-            });
-            
-            await Promise.race([verifyPromise, timeoutPromise]);
+            // Test connection
+            await testTransporter.verify();
             
             console.log(`✅ ${config.name} works!`);
             return { transporter: testTransporter, config };
@@ -177,7 +171,7 @@ const findWorkingConfig = async () => {
     }
 })();
 
-// Helper function to save form data to file (fallback when email fails)
+// Helper function to save form data to file
 const saveFormToFile = async (formData, pdfBuffer, photoFile) => {
     const timestamp = Date.now();
     const sanitizedName = formData.childName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -533,9 +527,31 @@ app.post('/api/contact', async (req, res) => {
         
     } catch (error) {
         console.error('❌ Contact form error:', error);
-        res.status(500).json({
-            error: 'Failed to send message. Please try again.'
-        });
+        
+        // Fallback to file save
+        try {
+            const { name, email, phone, message } = req.body;
+            const contactDir = path.join(__dirname, 'temp', 'contacts');
+            await fs.ensureDir(contactDir);
+            
+            const filename = `contact_${Date.now()}.json`;
+            const filepath = path.join(contactDir, filename);
+            
+            await fs.writeJSON(filepath, {
+                name, email, phone, message,
+                timestamp: new Date().toISOString(),
+                error: error.message
+            }, { spaces: 2 });
+            
+            res.status(200).json({
+                success: true,
+                message: 'Message received! We will contact you soon.'
+            });
+        } catch (fallbackError) {
+            res.status(500).json({
+                error: 'Failed to send message. Please try again.'
+            });
+        }
     }
 });
 
@@ -568,116 +584,86 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
             });
         }
         
-        // If no working email transporter, save to file system
-        if (!transporter) {
-            const savedPath = await saveFormToFile(formData, pdfBuffer, photoFile);
-            
-            return res.status(200).json({
-                success: true,
-                message: 'Application received! We will process it shortly.',
-                reference: path.basename(savedPath)
-            });
-        }
+        // ALWAYS save to file as backup
+        const savedPath = await saveFormToFile(formData, pdfBuffer, photoFile);
         
-        // Try to send email
-        const mailOptions = {
-            from: '"Minervaa Admissions" <roobankr6@gmail.com>',
-            to: 'suryareigns18@gmail.com',
-            subject: `New Admission: ${formData.childName}`,
-            html: `
-                <h2>New Admission Enquiry</h2>
-                <p><strong>Student:</strong> ${formData.childName}</p>
-                <p><strong>Class:</strong> ${formData.classAdmission}</p>
-                <p><strong>Contact:</strong> ${formData.contactNumber}</p>
-                <p><strong>DOB:</strong> ${formData.dateOfBirth}</p>
-                <p>Full details in attached PDF</p>
-            `,
-            attachments: [
-                {
-                    filename: `Admission_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
-                    content: pdfBuffer,
-                    contentType: 'application/pdf'
+        // Try to send email if transporter exists
+        if (transporter) {
+            try {
+                const mailOptions = {
+                    from: '"Minervaa Admissions" <roobankr6@gmail.com>',
+                    to: 'suryareigns18@gmail.com',
+                    subject: `New Admission: ${formData.childName}`,
+                    html: `
+                        <h2>New Admission Enquiry</h2>
+                        <p><strong>Student:</strong> ${formData.childName}</p>
+                        <p><strong>Class:</strong> ${formData.classAdmission}</p>
+                        <p><strong>Contact:</strong> ${formData.contactNumber}</p>
+                        <p><strong>DOB:</strong> ${formData.dateOfBirth}</p>
+                        <p>Full details in attached PDF</p>
+                        <p><strong>Backup file:</strong> ${path.basename(savedPath)}</p>
+                    `,
+                    attachments: [
+                        {
+                            filename: `Admission_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
+                            content: pdfBuffer,
+                            contentType: 'application/pdf'
+                        }
+                    ]
+                };
+                
+                if (photoFile && photoFile.buffer) {
+                    mailOptions.attachments.push({
+                        filename: `Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname) || '.jpg'}`,
+                        content: photoFile.buffer,
+                        contentType: photoFile.mimetype || 'image/jpeg'
+                    });
                 }
-            ]
-        };
-        
-        if (photoFile && photoFile.buffer) {
-            mailOptions.attachments.push({
-                filename: `Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname) || '.jpg'}`,
-                content: photoFile.buffer,
-                contentType: photoFile.mimetype || 'image/jpeg'
-            });
+                
+                // Try to send but don't wait too long
+                const emailPromise = transporter.sendMail(mailOptions);
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Email timeout')), 10000);
+                });
+                
+                await Promise.race([emailPromise, timeoutPromise]);
+                console.log(`✅ Email sent for ${formData.childName}`);
+                
+            } catch (emailError) {
+                console.log(`⚠️ Email failed but form saved: ${emailError.message}`);
+                // Don't return error - we already saved the file
+            }
         }
         
-        // Send with shorter timeout
-        const emailPromise = transporter.sendMail(mailOptions);
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email timeout')), 30000);
-        });
-        
-        await Promise.race([emailPromise, timeoutPromise]);
-        
-        console.log(`✅ Admission form sent for ${formData.childName}`);
-        
-        res.status(200).json({
+        // Always return success (form is saved)
+        return res.status(200).json({
             success: true,
-            message: 'Application submitted successfully!'
+            message: 'Application received! We will contact you soon.',
+            reference: path.basename(savedPath)
         });
         
     } catch (error) {
         console.error('❌ Admission error:', error);
-        
-        // If email fails but we have the data, save to file as fallback
-        try {
-            const formData = req.body;
-            const photoFile = req.file;
-            const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
-            const savedPath = await saveFormToFile(formData, pdfBuffer, photoFile);
-            
-            res.status(200).json({
-                success: true,
-                message: 'Application received! We will contact you soon.',
-                reference: path.basename(savedPath)
-            });
-        } catch (fallbackError) {
-            res.status(500).json({
-                error: 'Failed to process. Please try again or call us.'
-            });
-        }
+        res.status(500).json({
+            error: 'Failed to process. Please try again or call us.'
+        });
     }
 });
 
-// Test email endpoint
-app.get('/api/test-email', async (req, res) => {
-    if (!transporter) {
-        return res.json({ 
-            success: false, 
-            message: 'No working email configuration',
-            note: 'Using file storage mode'
-        });
+// View saved forms (BASIC AUTH - CHANGE PASSWORD!)
+app.get('/api/admin/forms', async (req, res) => {
+    // Simple authentication - CHANGE THIS!
+    const auth = req.headers.authorization;
+    if (!auth || auth !== 'Basic admin:school123') {
+        return res.status(401).json({ error: 'Unauthorized' });
     }
     
     try {
-        const testMail = {
-            from: '"Test" <roobankr6@gmail.com>',
-            to: 'suryareigns18@gmail.com',
-            subject: 'Test Email',
-            text: 'If you receive this, email is working!'
-        };
-        
-        await transporter.sendMail(testMail);
-        res.json({ success: true, message: 'Test email sent!' });
-    } catch (error) {
-        console.error('Test email failed:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// List saved forms endpoint (admin only - protect this in production)
-app.get('/api/admin/forms', async (req, res) => {
-    try {
         const tempPath = path.join(__dirname, 'temp');
-        const forms = [];
+        const result = {
+            contacts: [],
+            admissions: []
+        };
         
         const items = await fs.readdir(tempPath);
         
@@ -685,29 +671,103 @@ app.get('/api/admin/forms', async (req, res) => {
             const itemPath = path.join(tempPath, item);
             const stat = await fs.stat(itemPath);
             
-            if (stat.isDirectory() && item.startsWith('admission_')) {
-                try {
-                    const dataPath = path.join(itemPath, 'data.json');
-                    if (await fs.pathExists(dataPath)) {
-                        const data = await fs.readJSON(dataPath);
-                        forms.push({
-                            id: item,
-                            timestamp: stat.birthtime,
-                            childName: data.childName,
-                            classAdmission: data.classAdmission,
-                            contactNumber: data.contactNumber
-                        });
+            if (stat.isDirectory()) {
+                if (item.startsWith('admission_')) {
+                    try {
+                        const dataPath = path.join(itemPath, 'data.json');
+                        if (await fs.pathExists(dataPath)) {
+                            const data = await fs.readJSON(dataPath);
+                            result.admissions.push({
+                                id: item,
+                                timestamp: stat.birthtime,
+                                data: data,
+                                hasPhoto: await fs.pathExists(path.join(itemPath, 'photo.jpg')) || 
+                                         await fs.pathExists(path.join(itemPath, 'photo.png'))
+                            });
+                        }
+                    } catch (err) {
+                        console.error(`Error reading ${item}:`, err);
                     }
+                }
+            } else if (item.startsWith('contact_') && item.endsWith('.json')) {
+                try {
+                    const data = await fs.readJSON(itemPath);
+                    result.contacts.push({
+                        id: item,
+                        timestamp: stat.birthtime,
+                        data: data
+                    });
                 } catch (err) {
                     console.error(`Error reading ${item}:`, err);
                 }
             }
         }
         
-        res.json({ success: true, forms });
+        // Sort by newest first
+        result.admissions.sort((a, b) => b.timestamp - a.timestamp);
+        result.contacts.sort((a, b) => b.timestamp - a.timestamp);
+        
+        res.json({ success: true, ...result });
     } catch (error) {
         console.error('Error listing forms:', error);
         res.status(500).json({ error: 'Failed to list forms' });
+    }
+});
+
+// Download specific form files
+app.get('/api/admin/download/:folder/:file', async (req, res) => {
+    // Same simple authentication
+    const auth = req.headers.authorization;
+    if (!auth || auth !== 'Basic admin:school123') {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    try {
+        const { folder, file } = req.params;
+        const filePath = path.join(__dirname, 'temp', folder, file);
+        
+        if (!await fs.pathExists(filePath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        
+        res.sendFile(filePath);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test email endpoint with fixed EHLO
+app.get('/api/test-email', async (req, res) => {
+    try {
+        // Test with fixed configuration
+        const testConfig = {
+            host: 'smtp.gmail.com',
+            port: 587,
+            secure: false,
+            auth: {
+                user: 'roobankr6@gmail.com',
+                pass: 'jvjkdwuhtmgvlldf'
+            },
+            tls: {
+                rejectUnauthorized: false
+            },
+            name: hostname // Critical fix
+        };
+        
+        const testTransporter = nodemailer.createTransport(testConfig);
+        await testTransporter.verify();
+        
+        res.json({ 
+            success: true, 
+            message: 'Email configuration works!',
+            hostname: hostname
+        });
+    } catch (error) {
+        res.json({ 
+            success: false, 
+            error: error.message,
+            hostname: hostname
+        });
     }
 });
 
@@ -717,7 +777,8 @@ app.get('/health', (req, res) => {
         status: 'OK',
         time: new Date().toISOString(),
         email: transporter ? 'configured' : 'fallback-mode',
-        activeConfig: activeConfig?.name || 'none'
+        activeConfig: activeConfig?.name || 'none',
+        hostname: hostname
     });
 });
 
@@ -746,6 +807,7 @@ app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
     console.log(`📧 Email: roobankr6@gmail.com`);
     console.log(`📨 Recipient: suryareigns18@gmail.com`);
-    console.log('🔄 Testing email configurations...');
-    console.log('🚀 ==================================\n');
+    console.log(`🖥️  Hostname: ${os.hostname()}`);
+    console.log('🔄 Testing email with fixed EHLO...');
+    console.log('==================================\n');
 });
