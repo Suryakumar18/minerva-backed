@@ -29,8 +29,8 @@ app.use(cors({
 
 // Rate limiting to prevent spam
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 50, // limit each IP to 50 requests per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 50,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
@@ -53,12 +53,12 @@ app.use(morgan('dev'));
 const tempDir = path.join(__dirname, 'temp');
 fs.ensureDirSync(tempDir);
 
-// Configure multer for file uploads (memory storage)
+// Configure multer for file uploads
 const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
+        fileSize: 5 * 1024 * 1024,
     },
     fileFilter: (req, file, cb) => {
         if (file.fieldname === 'photo') {
@@ -70,54 +70,138 @@ const upload = multer({
     }
 });
 
-// Email configuration with better timeout handling
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587, // Changed from 465 to 587 for better compatibility
-    secure: false, // false for 587
-    auth: {
-        user: 'roobankr6@gmail.com',
-        pass: 'jvjkdwuhtmgvlldf'
-    },
-    // Increased timeouts
-    connectionTimeout: 120000, // 2 minutes
-    greetingTimeout: 60000,    // 1 minute
-    socketTimeout: 120000,     // 2 minutes
-    // TLS options
-    tls: {
-        rejectUnauthorized: false, // Only for development
-        ciphers: 'SSLv3'
-    },
-    debug: true,
-    logger: true,
-    // Add pool configuration for better connection handling
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100
-});
+// =============================================
+// EMAIL CONFIGURATION WITH MULTIPLE FALLBACKS
+// =============================================
 
-// Verify email connection with retry logic
-const verifyEmailConnection = async (retries = 3) => {
-    for (let i = 0; i < retries; i++) {
-        try {
-            await transporter.verify();
-            console.log('✅ Email server is ready to send messages');
-            return true;
-        } catch (error) {
-            console.log(`⚠️ Email verification attempt ${i + 1} failed:`, error.message);
-            if (i === retries - 1) {
-                console.error('❌ All email verification attempts failed:', error);
-                return false;
-            }
-            // Wait before retrying
-            await new Promise(resolve => setTimeout(resolve, 5000));
+// Try different SMTP configurations
+const emailConfigs = [
+    // Config 1: Gmail with 587 (TLS)
+    {
+        name: 'Gmail 587',
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        auth: {
+            user: 'roobankr6@gmail.com',
+            pass: 'jvjkdwuhtmgvlldf'
+        },
+        tls: {
+            rejectUnauthorized: false,
+            ciphers: 'SSLv3'
+        }
+    },
+    // Config 2: Gmail with 465 (SSL)
+    {
+        name: 'Gmail 465',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
+        auth: {
+            user: 'roobankr6@gmail.com',
+            pass: 'jvjkdwuhtmgvlldf'
+        },
+        tls: {
+            rejectUnauthorized: false
+        }
+    },
+    // Config 3: Gmail with 25 (if allowed)
+    {
+        name: 'Gmail 25',
+        host: 'smtp.gmail.com',
+        port: 25,
+        secure: false,
+        auth: {
+            user: 'roobankr6@gmail.com',
+            pass: 'jvjkdwuhtmgvlldf'
+        },
+        tls: {
+            rejectUnauthorized: false
         }
     }
-    return false;
+];
+
+let transporter = null;
+let activeConfig = null;
+
+// Function to create transporter with timeout
+const createTransporter = (config) => {
+    return nodemailer.createTransport({
+        ...config,
+        connectionTimeout: 30000, // 30 seconds
+        greetingTimeout: 30000,
+        socketTimeout: 30000,
+        debug: true,
+        logger: true,
+        pool: false // Disable pooling for testing
+    });
 };
 
-// Call verification
-verifyEmailConnection();
+// Try to connect with each configuration
+const findWorkingConfig = async () => {
+    console.log('🔍 Testing email configurations...');
+    
+    for (const config of emailConfigs) {
+        try {
+            console.log(`Testing ${config.name}...`);
+            const testTransporter = createTransporter(config);
+            
+            // Test with a shorter timeout
+            const verifyPromise = testTransporter.verify();
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Verification timeout')), 10000);
+            });
+            
+            await Promise.race([verifyPromise, timeoutPromise]);
+            
+            console.log(`✅ ${config.name} works!`);
+            return { transporter: testTransporter, config };
+        } catch (error) {
+            console.log(`❌ ${config.name} failed:`, error.message);
+        }
+    }
+    
+    return { transporter: null, config: null };
+};
+
+// Initialize email on startup
+(async () => {
+    const result = await findWorkingConfig();
+    if (result.transporter) {
+        transporter = result.transporter;
+        activeConfig = result.config;
+        console.log(`✅ Using email config: ${activeConfig.name}`);
+    } else {
+        console.log('❌ No working email configuration found');
+        console.log('⚠️ Will fall back to file storage mode');
+    }
+})();
+
+// Helper function to save form data to file (fallback when email fails)
+const saveFormToFile = async (formData, pdfBuffer, photoFile) => {
+    const timestamp = Date.now();
+    const sanitizedName = formData.childName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const formDir = path.join(__dirname, 'temp', `admission_${sanitizedName}_${timestamp}`);
+    
+    await fs.ensureDir(formDir);
+    
+    // Save PDF
+    const pdfPath = path.join(formDir, 'form.pdf');
+    await fs.writeFile(pdfPath, pdfBuffer);
+    
+    // Save photo if exists
+    if (photoFile && photoFile.buffer) {
+        const photoPath = path.join(formDir, `photo${path.extname(photoFile.originalname) || '.jpg'}`);
+        await fs.writeFile(photoPath, photoFile.buffer);
+    }
+    
+    // Save form data as JSON
+    const dataPath = path.join(formDir, 'data.json');
+    await fs.writeJSON(dataPath, formData, { spaces: 2 });
+    
+    console.log(`✅ Form saved to: ${formDir}`);
+    return formDir;
+};
 
 // Helper function to create styled tables in PDF
 const createStyledTable = (doc, headers, data, startY, columnWidths) => {
@@ -126,13 +210,11 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
         const rowHeight = 25;
         const cellPadding = 5;
         
-        // Colors
         const headerBgColor = '#4F46E5';
         const headerTextColor = '#FFFFFF';
         const alternateRowColor = '#F3F4F6';
         const borderColor = '#E5E7EB';
         
-        // Draw table headers
         doc.fillColor(headerBgColor);
         doc.rect(50, tableTop, 500, rowHeight).fill();
         
@@ -148,7 +230,6 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
             xPosition += columnWidths[i];
         });
         
-        // Draw table rows
         let yPosition = tableTop + rowHeight;
         
         data.forEach((row, rowIndex) => {
@@ -212,9 +293,7 @@ const generatePDF = async (formData, photoBuffer) => {
                 bufferPages: true,
                 info: {
                     Title: `Admission Form - ${formData.childName || 'Unknown'}`,
-                    Author: 'Minervaa Vidhya Mandhir School',
-                    Creator: 'Minervaa School System',
-                    Producer: 'PDFKit'
+                    Author: 'Minervaa Vidhya Mandhir School'
                 }
             });
             
@@ -226,14 +305,10 @@ const generatePDF = async (formData, photoBuffer) => {
                 console.log(`✅ PDF generated: ${finalBuffer.length} bytes`);
                 resolve(finalBuffer);
             });
-            doc.on('error', (err) => {
-                console.error('PDF document error:', err);
-                reject(err);
-            });
+            doc.on('error', reject);
             
             // Add header
-            doc.rect(0, 0, doc.page.width, 120)
-               .fill('#4F46E5');
+            doc.rect(0, 0, doc.page.width, 120).fill('#4F46E5');
             
             doc.fillColor('#FFFFFF')
                .fontSize(28)
@@ -266,12 +341,9 @@ const generatePDF = async (formData, photoBuffer) => {
                     doc.image(photoBuffer, 255, currentY + 5, {
                         width: 90,
                         height: 110,
-                        align: 'center',
-                        valign: 'center',
                         fit: [90, 110]
                     });
                 } catch (err) {
-                    console.error('Error adding image:', err);
                     doc.fillColor('#EF4444')
                        .fontSize(10)
                        .text('Photo unavailable', 255, currentY + 55, {
@@ -307,18 +379,11 @@ const generatePDF = async (formData, photoBuffer) => {
                 ['Contact Number', formData.contactNumber || 'N/A']
             ];
             
-            currentY = createStyledTable(
-                doc,
-                ['Field', 'Details'],
-                childData,
-                currentY,
-                [200, 300]
-            );
-            
+            currentY = createStyledTable(doc, ['Field', 'Details'], childData, currentY, [200, 300]);
             currentY += 20;
             
             // Father Details
-            if (formData.fatherName && formData.fatherName.trim() !== '') {
+            if (formData.fatherName && formData.fatherName.trim()) {
                 if (currentY > 700) {
                     doc.addPage();
                     currentY = 50;
@@ -342,19 +407,13 @@ const generatePDF = async (formData, photoBuffer) => {
                 ].filter(row => row[1] && row[1] !== 'N/A');
                 
                 if (fatherData.length > 0) {
-                    currentY = createStyledTable(
-                        doc,
-                        ['Field', 'Details'],
-                        fatherData,
-                        currentY,
-                        [200, 300]
-                    );
+                    currentY = createStyledTable(doc, ['Field', 'Details'], fatherData, currentY, [200, 300]);
                     currentY += 20;
                 }
             }
             
             // Mother Details
-            if (formData.motherName && formData.motherName.trim() !== '') {
+            if (formData.motherName && formData.motherName.trim()) {
                 if (currentY > 700) {
                     doc.addPage();
                     currentY = 50;
@@ -378,49 +437,7 @@ const generatePDF = async (formData, photoBuffer) => {
                 ].filter(row => row[1] && row[1] !== 'N/A');
                 
                 if (motherData.length > 0) {
-                    currentY = createStyledTable(
-                        doc,
-                        ['Field', 'Details'],
-                        motherData,
-                        currentY,
-                        [200, 300]
-                    );
-                    currentY += 20;
-                }
-            }
-            
-            // Guardian Details
-            if (formData.guardianName && formData.guardianName.trim() !== '') {
-                if (currentY > 700) {
-                    doc.addPage();
-                    currentY = 50;
-                }
-                
-                doc.fillColor('#4F46E5')
-                   .fontSize(16)
-                   .font('Helvetica-Bold')
-                   .text('GUARDIAN DETAILS', 50, currentY);
-                
-                currentY += 25;
-                
-                const guardianData = [
-                    ['Name', formData.guardianName || 'N/A'],
-                    ['Nationality', formData.guardianNationality || 'N/A'],
-                    ['Occupation', formData.guardianOccupation || 'N/A'],
-                    ['Office Address', formData.guardianOfficeAddress || 'N/A'],
-                    ['Distance from School', formData.guardianDistance || 'N/A'],
-                    ['Permanent Address', formData.guardianPermanentAddress || 'N/A'],
-                    ['Monthly Income', formData.guardianIncome || 'N/A']
-                ].filter(row => row[1] && row[1] !== 'N/A');
-                
-                if (guardianData.length > 0) {
-                    currentY = createStyledTable(
-                        doc,
-                        ['Field', 'Details'],
-                        guardianData,
-                        currentY,
-                        [200, 300]
-                    );
+                    currentY = createStyledTable(doc, ['Field', 'Details'], motherData, currentY, [200, 300]);
                     currentY += 20;
                 }
             }
@@ -444,19 +461,11 @@ const generatePDF = async (formData, photoBuffer) => {
                 ['How did you know about us', formData.howKnow || 'N/A']
             ];
             
-            createStyledTable(
-                doc,
-                ['Field', 'Details'],
-                academicData,
-                currentY,
-                [200, 300]
-            );
+            createStyledTable(doc, ['Field', 'Details'], academicData, currentY, [200, 300]);
             
-            console.log('Finalizing PDF...');
             doc.end();
             
         } catch (error) {
-            console.error('❌ PDF generation error:', error);
             reject(error);
         }
     });
@@ -470,18 +479,36 @@ app.post('/api/contact', async (req, res) => {
         console.log('📞 Contact form submission from:', name);
         
         if (!name || !email || !phone || !message) {
-            return res.status(400).json({
-                error: 'All fields are required'
-            });
+            return res.status(400).json({ error: 'All fields are required' });
         }
         
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            return res.status(400).json({
-                error: 'Please provide a valid email address'
+            return res.status(400).json({ error: 'Invalid email format' });
+        }
+        
+        // If no working email transporter, save to file
+        if (!transporter) {
+            const contactDir = path.join(__dirname, 'temp', 'contacts');
+            await fs.ensureDir(contactDir);
+            
+            const filename = `contact_${Date.now()}.json`;
+            const filepath = path.join(contactDir, filename);
+            
+            await fs.writeJSON(filepath, {
+                name, email, phone, message,
+                timestamp: new Date().toISOString()
+            }, { spaces: 2 });
+            
+            console.log(`✅ Contact saved to file: ${filename}`);
+            
+            return res.status(200).json({
+                success: true,
+                message: 'Message received! We will contact you soon.'
             });
         }
         
+        // Try to send email
         const adminMailOptions = {
             from: '"Minervaa School" <roobankr6@gmail.com>',
             to: 'suryareigns18@gmail.com',
@@ -493,13 +520,6 @@ app.post('/api/contact', async (req, res) => {
                 <p><strong>Phone:</strong> ${phone}</p>
                 <p><strong>Message:</strong></p>
                 <p>${message.replace(/\n/g, '<br>')}</p>
-            `,
-            text: `
-                New Contact Form Submission
-                Name: ${name}
-                Email: ${email}
-                Phone: ${phone}
-                Message: ${message}
             `
         };
         
@@ -543,11 +563,23 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
             pdfBuffer = await generatePDF(formData, photoFile?.buffer);
         } catch (pdfError) {
             console.error('PDF generation failed:', pdfError);
-            // Try without photo
-            pdfBuffer = await generatePDF(formData, null);
+            return res.status(500).json({
+                error: 'Failed to generate form. Please try again.'
+            });
         }
         
-        // Prepare email
+        // If no working email transporter, save to file system
+        if (!transporter) {
+            const savedPath = await saveFormToFile(formData, pdfBuffer, photoFile);
+            
+            return res.status(200).json({
+                success: true,
+                message: 'Application received! We will process it shortly.',
+                reference: path.basename(savedPath)
+            });
+        }
+        
+        // Try to send email
         const mailOptions = {
             from: '"Minervaa Admissions" <roobankr6@gmail.com>',
             to: 'suryareigns18@gmail.com',
@@ -569,7 +601,6 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
             ]
         };
         
-        // Add photo if available
         if (photoFile && photoFile.buffer) {
             mailOptions.attachments.push({
                 filename: `Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname) || '.jpg'}`,
@@ -578,10 +609,10 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
             });
         }
         
-        // Send email with timeout
+        // Send with shorter timeout
         const emailPromise = transporter.sendMail(mailOptions);
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email timeout')), 60000);
+            setTimeout(() => reject(new Error('Email timeout')), 30000);
         });
         
         await Promise.race([emailPromise, timeoutPromise]);
@@ -596,12 +627,19 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     } catch (error) {
         console.error('❌ Admission error:', error);
         
-        // Provide appropriate error message
-        if (error.message === 'Email timeout') {
-            res.status(500).json({
-                error: 'Email service timeout. Please try again.'
+        // If email fails but we have the data, save to file as fallback
+        try {
+            const formData = req.body;
+            const photoFile = req.file;
+            const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
+            const savedPath = await saveFormToFile(formData, pdfBuffer, photoFile);
+            
+            res.status(200).json({
+                success: true,
+                message: 'Application received! We will contact you soon.',
+                reference: path.basename(savedPath)
             });
-        } else {
+        } catch (fallbackError) {
             res.status(500).json({
                 error: 'Failed to process. Please try again or call us.'
             });
@@ -611,6 +649,14 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
 
 // Test email endpoint
 app.get('/api/test-email', async (req, res) => {
+    if (!transporter) {
+        return res.json({ 
+            success: false, 
+            message: 'No working email configuration',
+            note: 'Using file storage mode'
+        });
+    }
+    
     try {
         const testMail = {
             from: '"Test" <roobankr6@gmail.com>',
@@ -627,12 +673,51 @@ app.get('/api/test-email', async (req, res) => {
     }
 });
 
+// List saved forms endpoint (admin only - protect this in production)
+app.get('/api/admin/forms', async (req, res) => {
+    try {
+        const tempPath = path.join(__dirname, 'temp');
+        const forms = [];
+        
+        const items = await fs.readdir(tempPath);
+        
+        for (const item of items) {
+            const itemPath = path.join(tempPath, item);
+            const stat = await fs.stat(itemPath);
+            
+            if (stat.isDirectory() && item.startsWith('admission_')) {
+                try {
+                    const dataPath = path.join(itemPath, 'data.json');
+                    if (await fs.pathExists(dataPath)) {
+                        const data = await fs.readJSON(dataPath);
+                        forms.push({
+                            id: item,
+                            timestamp: stat.birthtime,
+                            childName: data.childName,
+                            classAdmission: data.classAdmission,
+                            contactNumber: data.contactNumber
+                        });
+                    }
+                } catch (err) {
+                    console.error(`Error reading ${item}:`, err);
+                }
+            }
+        }
+        
+        res.json({ success: true, forms });
+    } catch (error) {
+        console.error('Error listing forms:', error);
+        res.status(500).json({ error: 'Failed to list forms' });
+    }
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'OK',
         time: new Date().toISOString(),
-        email: 'configured'
+        email: transporter ? 'configured' : 'fallback-mode',
+        activeConfig: activeConfig?.name || 'none'
     });
 });
 
@@ -661,5 +746,6 @@ app.listen(PORT, () => {
     console.log(`✅ Server running on port ${PORT}`);
     console.log(`📧 Email: roobankr6@gmail.com`);
     console.log(`📨 Recipient: suryareigns18@gmail.com`);
+    console.log('🔄 Testing email configurations...');
     console.log('🚀 ==================================\n');
 });
