@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
+const sgMail = require('@sendgrid/mail');
 
 const app = express();
 
@@ -19,22 +20,19 @@ app.use(helmet());
 
 // CORS configuration
 app.use(cors({
-  origin: ['https://minevera-school-frontend.vercel.app', 'http://localhost:5173', 'http://localhost:5174'], // Add your frontend URLs
+  origin: ['https://minevera-school-frontend.vercel.app', 'http://localhost:5173', 'http://localhost:5174'],
   credentials: true
 }));
-
 
 // Rate limiting to prevent spam
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 50, // limit each IP to 50 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
   keyGenerator: (req) => {
-    // Custom key generator that works with proxy
     return req.ip || req.connection.remoteAddress;
   },
-  // Skip rate limiting for health checks
   skip: (req) => {
     return req.path === '/health';
   }
@@ -60,7 +58,6 @@ const upload = multer({
   },
   fileFilter: (req, file, cb) => {
     if (file.fieldname === 'photo') {
-      // Accept images only
       if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
         return cb(new Error('Only image files are allowed!'), false);
       }
@@ -69,63 +66,48 @@ const upload = multer({
   }
 });
 
-// Create email transporter with hardcoded credentials and better configuration
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465, // Changed to 465
-  secure: true, // Changed to true
-  auth: {
-    user: 'roobankr6@gmail.com',
-    pass: 'jvjkdwuhtmgvlldf'
-  },
-  // Add timeouts
-  connectionTimeout: 60000, // 60 seconds
-  greetingTimeout: 30000,   // 30 seconds
-  socketTimeout: 60000,     // 60 seconds
-  // TLS options
-  tls: {
-    rejectUnauthorized: false, // Helps with some network issues
-    ciphers: 'SSLv3'
-  },
-  // Debug options
-  debug: true,
-  logger: true
-});
+// Configure SendGrid with API key from environment variables
+if (!process.env.SENDGRID_API_KEY) {
+  console.error('❌ SENDGRID_API_KEY is not set in environment variables');
+  console.error('Please add it to your Render environment variables');
+} else {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  console.log('✅ SendGrid configured successfully');
+}
 
-// Verify email connection with better error handling
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('❌ Email configuration error:', error);
-    console.error('This might be due to network restrictions on Render');
-    console.error('Try using a different port or check Render documentation for SMTP access');
-  } else {
-    console.log('✅ Email server is ready to send messages');
-  }
-});
+// SendGrid email sending function
+async function sendEmailWithSendGrid(mailOptions) {
+  try {
+    // Convert attachments to base64 if they exist
+    const attachments = mailOptions.attachments ? mailOptions.attachments.map(att => ({
+      content: att.content.toString('base64'),
+      filename: att.filename,
+      type: att.contentType,
+      disposition: 'attachment'
+    })) : [];
 
-// Add retry function
-async function sendMailWithRetry(mailOptions, maxRetries = 3) {
-  let lastError;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`📧 Email attempt ${attempt}/${maxRetries}...`);
-      const info = await transporter.sendMail(mailOptions);
-      console.log(`✅ Email sent on attempt ${attempt}`);
-      return info;
-    } catch (error) {
-      lastError = error;
-      console.log(`❌ Attempt ${attempt} failed:`, error.message);
-      
-      if (attempt < maxRetries) {
-        const waitTime = attempt * 2000;
-        console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
+    const msg = {
+      to: mailOptions.to,
+      from: process.env.FORM_EMAIL || 'roobankr6@gmail.com', // Verified sender in SendGrid
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      text: mailOptions.text || '',
+      attachments: attachments
+    };
+
+    console.log('📧 Sending email via SendGrid...');
+    const response = await sgMail.send(msg);
+    console.log('✅ Email sent via SendGrid');
+    return response;
+  } catch (error) {
+    console.error('❌ SendGrid error details:');
+    if (error.response) {
+      console.error('SendGrid Response Body:', error.response.body);
+    } else {
+      console.error('SendGrid Error:', error.message);
     }
+    throw error;
   }
-  
-  throw lastError;
 }
 
 // Helper function to create styled tables in PDF
@@ -134,11 +116,10 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
   const rowHeight = 25;
   const cellPadding = 5;
   
-  // Colors
-  const headerBgColor = '#4F46E5'; // Indigo
+  const headerBgColor = '#4F46E5';
   const headerTextColor = '#FFFFFF';
-  const alternateRowColor = '#F3F4F6'; // Light gray
-  const borderColor = '#E5E7EB'; // Gray border
+  const alternateRowColor = '#F3F4F6';
+  const borderColor = '#E5E7EB';
   
   // Draw table headers
   doc.fillColor(headerBgColor);
@@ -160,16 +141,13 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
   let yPosition = tableTop + rowHeight;
   
   data.forEach((row, rowIndex) => {
-    // Alternate row background
     if (rowIndex % 2 === 0) {
       doc.fillColor(alternateRowColor);
       doc.rect(50, yPosition, 500, rowHeight).fill();
     }
     
-    // Draw row borders
     doc.strokeColor(borderColor).lineWidth(0.5);
     
-    // Draw vertical lines
     let lineX = 50;
     for (let i = 0; i <= columnWidths.length; i++) {
       doc.moveTo(lineX, yPosition)
@@ -178,12 +156,10 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
       if (i < columnWidths.length) lineX += columnWidths[i];
     }
     
-    // Draw horizontal lines
     doc.moveTo(50, yPosition)
        .lineTo(550, yPosition)
        .stroke();
     
-    // Draw cell content
     doc.fillColor('#1F2937').font('Helvetica').fontSize(9);
     
     xPosition = 50;
@@ -198,12 +174,10 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
     yPosition += rowHeight;
   });
   
-  // Draw bottom border
   doc.moveTo(50, yPosition)
      .lineTo(550, yPosition)
      .stroke();
   
-  // Reset fill color
   doc.fillColor('black');
   
   return yPosition;
@@ -253,14 +227,12 @@ const generatePDF = async (formData, photoBuffer) => {
         
         currentY += 25;
         
-        // Create a frame for the photo
         doc.strokeColor('#4F46E5')
            .lineWidth(2)
            .rect(250, currentY, 100, 120)
            .stroke();
         
         try {
-          // Center the image in the frame
           doc.image(photoBuffer, 255, currentY + 5, { 
             width: 90, 
             height: 110,
@@ -282,13 +254,12 @@ const generatePDF = async (formData, photoBuffer) => {
         currentY += 20;
       }
       
-      // Check if we need a new page for child information
+      // Child Information Table
       if (currentY > 700) {
         doc.addPage();
         currentY = 50;
       }
       
-      // Child Information Table
       doc.fillColor('#4F46E5')
          .fontSize(16)
          .font('Helvetica-Bold')
@@ -317,7 +288,6 @@ const generatePDF = async (formData, photoBuffer) => {
       
       // Father Details
       if (formData.fatherName && formData.fatherName.trim() !== '') {
-        // Check if we need a new page
         if (currentY > 700) {
           doc.addPage();
           currentY = 50;
@@ -338,7 +308,7 @@ const generatePDF = async (formData, photoBuffer) => {
           ['Distance from School', formData.fatherDistance],
           ['Permanent Address', formData.fatherPermanentAddress],
           ['Monthly Income', formData.fatherIncome]
-        ].filter(row => row[1] && row[1].trim() !== ''); // Remove empty rows
+        ].filter(row => row[1] && row[1].trim() !== '');
         
         if (fatherData.length > 0) {
           currentY = createStyledTable(
@@ -354,7 +324,6 @@ const generatePDF = async (formData, photoBuffer) => {
       
       // Mother Details
       if (formData.motherName && formData.motherName.trim() !== '') {
-        // Check if we need a new page
         if (currentY > 700) {
           doc.addPage();
           currentY = 50;
@@ -375,7 +344,7 @@ const generatePDF = async (formData, photoBuffer) => {
           ['Distance from School', formData.motherDistance],
           ['Permanent Address', formData.motherPermanentAddress],
           ['Monthly Income', formData.motherIncome]
-        ].filter(row => row[1] && row[1].trim() !== ''); // Remove empty rows
+        ].filter(row => row[1] && row[1].trim() !== '');
         
         if (motherData.length > 0) {
           currentY = createStyledTable(
@@ -391,7 +360,6 @@ const generatePDF = async (formData, photoBuffer) => {
       
       // Guardian Details
       if (formData.guardianName && formData.guardianName.trim() !== '') {
-        // Check if we need a new page
         if (currentY > 700) {
           doc.addPage();
           currentY = 50;
@@ -412,7 +380,7 @@ const generatePDF = async (formData, photoBuffer) => {
           ['Distance from School', formData.guardianDistance],
           ['Permanent Address', formData.guardianPermanentAddress],
           ['Monthly Income', formData.guardianIncome]
-        ].filter(row => row[1] && row[1].trim() !== ''); // Remove empty rows
+        ].filter(row => row[1] && row[1].trim() !== '');
         
         if (guardianData.length > 0) {
           currentY = createStyledTable(
@@ -427,7 +395,6 @@ const generatePDF = async (formData, photoBuffer) => {
       }
       
       // Academic Information
-      // Check if we need a new page
       if (currentY > 700) {
         doc.addPage();
         currentY = 50;
@@ -468,14 +435,12 @@ app.post('/api/contact', async (req, res) => {
     
     console.log('📞 Received contact form submission from:', name);
     
-    // Validate required fields
     if (!name || !email || !phone || !message) {
       return res.status(400).json({ 
         error: 'All fields are required' 
       });
     }
     
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ 
@@ -483,9 +448,8 @@ app.post('/api/contact', async (req, res) => {
       });
     }
     
-    // Prepare email options for admin notification only
     const adminMailOptions = {
-      from: '"Minervaa School Website" <roobankr6@gmail.com>',
+      from: process.env.FORM_EMAIL || '"Minervaa School Website" <roobankr6@gmail.com>',
       to: 'suryareigns18@gmail.com',
       subject: `New Contact Form Message - ${name}`,
       html: `
@@ -538,7 +502,6 @@ app.post('/api/contact', async (req, res) => {
         </body>
         </html>
       `,
-      // Plain text version for email clients that don't support HTML
       text: `
         New Contact Form Message
         
@@ -553,11 +516,10 @@ app.post('/api/contact', async (req, res) => {
       `
     };
     
-    // Send only admin email
-    await transporter.sendMail(adminMailOptions);
+    // Use SendGrid for contact form
+    await sendEmailWithSendGrid(adminMailOptions);
     console.log(`✅ Contact form admin notification sent for ${name}`);
     
-    // Success response
     res.status(200).json({ 
       success: true, 
       message: 'Your message has been sent successfully. We will contact you soon!' 
@@ -572,7 +534,7 @@ app.post('/api/contact', async (req, res) => {
   }
 });
 
-// Admission form submission endpoint - Updated with better error logging
+// Admission form submission endpoint - USING SENDGRID
 app.post('/api/admission', upload.single('photo'), async (req, res) => {
   try {
     const formData = req.body;
@@ -605,12 +567,33 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
       throw new Error(`PDF generation failed: ${pdfError.message}`);
     }
     
-    console.log('📧 Preparing email...');
+    console.log('📧 Preparing email with SendGrid...');
     
-    // Prepare email options
-    const mailOptions = {
-      from: '"Minervaa School Admissions" <roobankr6@gmail.com>',
+    // Prepare attachments array
+    const attachments = [
+      {
+        filename: `Admission_Form_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
+        content: pdfBuffer.toString('base64'),
+        type: 'application/pdf',
+        disposition: 'attachment'
+      }
+    ];
+    
+    // Add photo as attachment if available
+    if (photoFile) {
+      console.log('📸 Photo received:', photoFile.originalname, photoFile.mimetype, photoFile.size, 'bytes');
+      attachments.push({
+        filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname)}`,
+        content: photoFile.buffer.toString('base64'),
+        type: photoFile.mimetype,
+        disposition: 'attachment'
+      });
+    }
+    
+    // Prepare email message for SendGrid
+    const msg = {
       to: 'suryareigns18@gmail.com',
+      from: process.env.FORM_EMAIL || 'roobankr6@gmail.com', // Must be verified in SendGrid
       subject: `New Admission Enquiry - ${formData.childName}`,
       html: `
         <!DOCTYPE html>
@@ -663,31 +646,14 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
         </body>
         </html>
       `,
-      attachments: [
-        {
-          filename: `Admission_Form_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf'
-        }
-      ]
+      attachments: attachments
     };
     
-    // Add photo as attachment if available
-    if (photoFile) {
-      console.log('📸 Photo received:', photoFile.originalname, photoFile.mimetype, photoFile.size, 'bytes');
-      mailOptions.attachments.push({
-        filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname)}`,
-        content: photoFile.buffer,
-        contentType: photoFile.mimetype,
-        cid: 'studentphoto'
-      });
-    }
+    console.log('📧 Sending email via SendGrid...');
     
-    console.log('📧 Sending email...');
-    
-    // Send email
-    const info = await transporter.sendMail(mailOptions);
-    console.log('✅ Email sent successfully:', info.messageId);
+    // Send email using SendGrid
+    const response = await sgMail.send(msg);
+    console.log('✅ Email sent via SendGrid, status code:', response[0].statusCode);
     console.log(`✅ Admission form email sent successfully for ${formData.childName}`);
     
     // Success response
@@ -700,20 +666,20 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     console.error('❌❌❌ ERROR PROCESSING ADMISSION FORM ❌❌❌');
     console.error('Error name:', error.name);
     console.error('Error message:', error.message);
+    
+    // Detailed SendGrid error logging
+    if (error.response) {
+      console.error('SendGrid Response Status:', error.response.statusCode);
+      console.error('SendGrid Response Body:', error.response.body);
+    }
+    
     console.error('Error stack:', error.stack);
     
     // Check for specific error types
-    if (error.code === 'EAUTH') {
-      console.error('Email authentication failed - check Gmail credentials');
+    if (error.code === 'EAUTH' || (error.response && error.response.statusCode === 401)) {
+      console.error('SendGrid authentication failed - check API key');
       return res.status(500).json({ 
         error: 'Email service configuration error. Please contact support.' 
-      });
-    }
-    
-    if (error.code === 'ECONNECTION') {
-      console.error('Could not connect to email server');
-      return res.status(500).json({ 
-        error: 'Could not connect to email service. Please try again later.' 
       });
     }
     
@@ -759,15 +725,12 @@ app.use((req, res) => {
 });
 
 // Start server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log('🚀 ==================================');
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📧 Email configured for: roobankr6@gmail.com`);
+  console.log(`📧 Using SendGrid for email delivery`);
   console.log(`📨 Sending to: suryareigns18@gmail.com`);
+  console.log(`✅ SendGrid API Key: ${process.env.SENDGRID_API_KEY ? 'Configured' : 'MISSING!'}`);
   console.log('🚀 ==================================');
 });
-
-
-
-
