@@ -534,25 +534,40 @@ app.post('/api/contact', async (req, res) => {
 });
 
 // Admission form submission endpoint
+// Admission form submission endpoint - Updated with better error logging
 app.post('/api/admission', upload.single('photo'), async (req, res) => {
   try {
     const formData = req.body;
     const photoFile = req.file;
     
     console.log('📝 Received admission form submission for:', formData.childName);
+    console.log('Form data keys:', Object.keys(formData));
     
     // Validate required fields
     const requiredFields = ['childName', 'dateOfBirth', 'sex', 'contactType', 'contactNumber', 'classAdmission', 'tcAttached', 'howKnow'];
     const missingFields = requiredFields.filter(field => !formData[field]);
     
     if (missingFields.length > 0) {
+      console.log('❌ Missing fields:', missingFields);
       return res.status(400).json({ 
         error: `Missing required fields: ${missingFields.join(', ')}` 
       });
     }
     
+    console.log('✅ Validation passed, generating PDF...');
+    
     // Generate PDF
-    const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
+    let pdfBuffer;
+    try {
+      pdfBuffer = await generatePDF(formData, photoFile?.buffer);
+      console.log('✅ PDF generated successfully, size:', pdfBuffer.length, 'bytes');
+    } catch (pdfError) {
+      console.error('❌ PDF generation error:', pdfError);
+      console.error('PDF error stack:', pdfError.stack);
+      throw new Error(`PDF generation failed: ${pdfError.message}`);
+    }
+    
+    console.log('📧 Preparing email...');
     
     // Prepare email options
     const mailOptions = {
@@ -621,17 +636,20 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     
     // Add photo as attachment if available
     if (photoFile) {
+      console.log('📸 Photo received:', photoFile.originalname, photoFile.mimetype, photoFile.size, 'bytes');
       mailOptions.attachments.push({
         filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname)}`,
         content: photoFile.buffer,
         contentType: photoFile.mimetype,
-        cid: 'studentphoto' // Content ID for embedding in email if needed
+        cid: 'studentphoto'
       });
     }
     
-    // Send email
-    await transporter.sendMail(mailOptions);
+    console.log('📧 Sending email...');
     
+    // Send email
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Email sent successfully:', info.messageId);
     console.log(`✅ Admission form email sent successfully for ${formData.childName}`);
     
     // Success response
@@ -641,7 +659,31 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error processing admission form:', error);
+    console.error('❌❌❌ ERROR PROCESSING ADMISSION FORM ❌❌❌');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    // Check for specific error types
+    if (error.code === 'EAUTH') {
+      console.error('Email authentication failed - check Gmail credentials');
+      return res.status(500).json({ 
+        error: 'Email service configuration error. Please contact support.' 
+      });
+    }
+    
+    if (error.code === 'ECONNECTION') {
+      console.error('Could not connect to email server');
+      return res.status(500).json({ 
+        error: 'Could not connect to email service. Please try again later.' 
+      });
+    }
+    
+    if (error.message.includes('PDF')) {
+      return res.status(500).json({ 
+        error: 'Failed to generate admission form. Please try again.' 
+      });
+    }
     
     res.status(500).json({ 
       error: 'Failed to process admission form. Please try again or contact us directly.' 
@@ -687,4 +729,5 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: suryareigns18@gmail.com`);
   console.log('🚀 ==================================');
 });
+
 
