@@ -443,7 +443,7 @@ app.post('/api/contact', async (req, res) => {
       });
     }
     
-    // Prepare email options for admin notification
+    // Prepare email options for admin notification only
     const adminMailOptions = {
       from: '"Minervaa School Website" <roobankr6@gmail.com>',
       to: 'suryareigns18@gmail.com',
@@ -513,96 +513,9 @@ app.post('/api/contact', async (req, res) => {
       `
     };
     
-    // Prepare auto-reply email for the user
-    const userMailOptions = {
-      from: '"Minervaa Vidhya Mandhir School" <roobankr6@gmail.com>',
-      to: email,
-      subject: 'Thank You for Contacting Minervaa Vidhya Mandhir School',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
-            .content { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 10px 10px; }
-            .message { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; }
-            .footer { margin-top: 20px; text-align: center; color: #777; font-size: 12px; }
-            .signature { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }
-            .school-name { color: #4F46E5; font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h2>Thank You for Contacting Us!</h2>
-            </div>
-            <div class="content">
-              <p>Dear ${name},</p>
-              
-              <p>Thank you for reaching out to <span class="school-name">Minervaa Vidhya Mandhir School</span>. We have received your message and appreciate your interest in our institution.</p>
-              
-              <div class="message">
-                <p><strong>Your Message:</strong></p>
-                <p>${message.replace(/\n/g, '<br>')}</p>
-              </div>
-              
-              <p>Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.</p>
-              
-              <p>In the meantime, you can:</p>
-              <ul>
-                <li>Visit our website to learn more about our programs</li>
-                <li>Follow us on social media for updates and events</li>
-                <li>Call us directly at +91-9994959484 for urgent inquiries</li>
-              </ul>
-              
-              <div class="signature">
-                <p>Warm regards,<br>
-                <strong>Admissions Office</strong><br>
-                <span class="school-name">Minervaa Vidhya Mandhir School</span><br>
-                Pollachi, Tamil Nadu</p>
-              </div>
-            </div>
-            <div class="footer">
-              <p>© ${new Date().getFullYear()} Minervaa Vidhya Mandhir School. All rights reserved.</p>
-              <p>2X9+75Q, Jothi Nagar, Pollachi, Tamil Nadu 642001</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-      text: `
-        Thank You for Contacting Minervaa Vidhya Mandhir School
-        
-        Dear ${name},
-        
-        Thank you for reaching out to Minervaa Vidhya Mandhir School. We have received your message and appreciate your interest in our institution.
-        
-        Your Message:
-        ${message}
-        
-        Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.
-        
-        In the meantime, you can:
-        - Visit our website to learn more about our programs
-        - Follow us on social media for updates and events
-        - Call us directly at +91-9994959484 for urgent inquiries
-        
-        Warm regards,
-        Admissions Office
-        Minervaa Vidhya Mandhir School
-        Pollachi, Tamil Nadu
-      `
-    };
-    
-    // Send email to admin
+    // Send only admin email
     await transporter.sendMail(adminMailOptions);
     console.log(`✅ Contact form admin notification sent for ${name}`);
-    
-    // Send auto-reply to user
-    await transporter.sendMail(userMailOptions);
-    console.log(`✅ Contact form auto-reply sent to ${email}`);
     
     // Success response
     res.status(200).json({ 
