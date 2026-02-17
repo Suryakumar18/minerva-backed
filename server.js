@@ -138,20 +138,16 @@ const createTransporter = (config) => {
 
 // Try to connect with each configuration
 const findWorkingConfig = async () => {
-    console.log('🔍 Testing email configurations with hostname:', hostname);
     
     for (const config of emailConfigs) {
         try {
-            console.log(`Testing ${config.name}...`);
             const testTransporter = createTransporter(config);
             
             // Test connection
             await testTransporter.verify();
             
-            console.log(`✅ ${config.name} works!`);
             return { transporter: testTransporter, config };
         } catch (error) {
-            console.log(`❌ ${config.name} failed:`, error.message);
         }
     }
     
@@ -164,10 +160,7 @@ const findWorkingConfig = async () => {
     if (result.transporter) {
         transporter = result.transporter;
         activeConfig = result.config;
-        console.log(`✅ Using email config: ${activeConfig.name}`);
     } else {
-        console.log('❌ No working email configuration found');
-        console.log('⚠️ Will fall back to file storage mode');
     }
 })();
 
@@ -193,7 +186,6 @@ const saveFormToFile = async (formData, pdfBuffer, photoFile) => {
     const dataPath = path.join(formDir, 'data.json');
     await fs.writeJSON(dataPath, formData, { spaces: 2 });
     
-    console.log(`✅ Form saved to: ${formDir}`);
     return formDir;
 };
 
@@ -278,7 +270,6 @@ const createStyledTable = (doc, headers, data, startY, columnWidths) => {
 const generatePDF = async (formData, photoBuffer) => {
     return new Promise((resolve, reject) => {
         try {
-            console.log('Starting PDF generation...');
             
             const doc = new PDFDocument({
                 size: 'A4',
@@ -296,7 +287,6 @@ const generatePDF = async (formData, photoBuffer) => {
             doc.on('data', chunk => chunks.push(chunk));
             doc.on('end', () => {
                 const finalBuffer = Buffer.concat(chunks);
-                console.log(`✅ PDF generated: ${finalBuffer.length} bytes`);
                 resolve(finalBuffer);
             });
             doc.on('error', reject);
@@ -561,8 +551,6 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
         const formData = req.body;
         const photoFile = req.file;
         
-        console.log('📝 Admission form for:', formData.childName);
-        
         // Validate required fields
         const requiredFields = ['childName', 'dateOfBirth', 'sex', 'contactType', 'contactNumber', 'classAdmission', 'tcAttached', 'howKnow'];
         const missingFields = requiredFields.filter(field => !formData[field]);
@@ -627,10 +615,8 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
                 });
                 
                 await Promise.race([emailPromise, timeoutPromise]);
-                console.log(`✅ Email sent for ${formData.childName}`);
                 
             } catch (emailError) {
-                console.log(`⚠️ Email failed but form saved: ${emailError.message}`);
                 // Don't return error - we already saved the file
             }
         }
