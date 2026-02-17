@@ -69,25 +69,64 @@ const upload = multer({
   }
 });
 
-// Create email transporter with hardcoded credentials
+// Create email transporter with hardcoded credentials and better configuration
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // true for 465, false for other ports
+  port: 465, // Changed to 465
+  secure: true, // Changed to true
   auth: {
     user: 'roobankr6@gmail.com',
     pass: 'jvjkdwuhtmgvlldf'
-  }
+  },
+  // Add timeouts
+  connectionTimeout: 60000, // 60 seconds
+  greetingTimeout: 30000,   // 30 seconds
+  socketTimeout: 60000,     // 60 seconds
+  // TLS options
+  tls: {
+    rejectUnauthorized: false, // Helps with some network issues
+    ciphers: 'SSLv3'
+  },
+  // Debug options
+  debug: true,
+  logger: true
 });
 
-// Verify email connection
+// Verify email connection with better error handling
 transporter.verify((error, success) => {
   if (error) {
-    console.error('Email configuration error:', error);
+    console.error('❌ Email configuration error:', error);
+    console.error('This might be due to network restrictions on Render');
+    console.error('Try using a different port or check Render documentation for SMTP access');
   } else {
     console.log('✅ Email server is ready to send messages');
   }
 });
+
+// Add retry function
+async function sendMailWithRetry(mailOptions, maxRetries = 3) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Email attempt ${attempt}/${maxRetries}...`);
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent on attempt ${attempt}`);
+      return info;
+    } catch (error) {
+      lastError = error;
+      console.log(`❌ Attempt ${attempt} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        const waitTime = attempt * 2000;
+        console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+  }
+  
+  throw lastError;
+}
 
 // Helper function to create styled tables in PDF
 const createStyledTable = (doc, headers, data, startY, columnWidths) => {
@@ -728,6 +767,7 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: suryareigns18@gmail.com`);
   console.log('🚀 ==================================');
 });
+
 
 
 
