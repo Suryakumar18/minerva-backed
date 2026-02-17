@@ -74,9 +74,14 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false, // true for 465, false for other ports
   auth: {
-    user: 'roobankr6@gmail.com',
-    pass: 'jvjkdwuhtmgvlldf'
-  }
+     user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+   connectionTimeout: 60000, // 60 seconds
+  greetingTimeout: 30000,    // 30 seconds
+  socketTimeout: 60000,      // 60 seconds
+  debug: true, // Enable debug logs
+  logger: true // Log to console
 });
 
 // Verify email connection
