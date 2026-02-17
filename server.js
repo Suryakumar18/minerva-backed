@@ -533,7 +533,6 @@ app.post('/api/contact', async (req, res) => {
   }
 });
 
-// Admission form submission endpoint
 // Admission form submission endpoint - Updated with better error logging
 app.post('/api/admission', upload.single('photo'), async (req, res) => {
   try {
@@ -729,5 +728,6 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: suryareigns18@gmail.com`);
   console.log('🚀 ==================================');
 });
+
 
 
