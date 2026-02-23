@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
+const { sendEmail } = require('./mail');
 
 const app = express();
 
@@ -19,7 +20,7 @@ app.use(helmet());
 
 // CORS configuration
 app.use(cors({
-  origin: ['https://minevera-school-frontend.vercel.app', 'http://localhost:5173', 'http://localhost:5174'], // Add your frontend URLs
+  origin: ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174'], // Add your frontend URLs
   credentials: true
 }));
 
@@ -74,14 +75,9 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false, // true for 465, false for other ports
   auth: {
-     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-   connectionTimeout: 60000, // 60 seconds
-  greetingTimeout: 30000,    // 30 seconds
-  socketTimeout: 60000,      // 60 seconds
-  debug: true, // Enable debug logs
-  logger: true // Log to console
+    user: 'roobankr6@gmail.com',
+    pass: 'jvjkdwuhtmgvlldf'
+  }
 });
 
 // Verify email connection
@@ -448,7 +444,7 @@ app.post('/api/contact', async (req, res) => {
       });
     }
     
-    // Prepare email options for admin notification only
+    // Prepare email options for admin notification
     const adminMailOptions = {
       from: '"Minervaa School Website" <roobankr6@gmail.com>',
       to: 'suryareigns18@gmail.com',
@@ -518,9 +514,96 @@ app.post('/api/contact', async (req, res) => {
       `
     };
     
-    // Send only admin email
+    // Prepare auto-reply email for the user
+    const userMailOptions = {
+      from: '"Minervaa Vidhya Mandhir School" <roobankr6@gmail.com>',
+      to: email,
+      subject: 'Thank You for Contacting Minervaa Vidhya Mandhir School',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 10px 10px; }
+            .message { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; }
+            .footer { margin-top: 20px; text-align: center; color: #777; font-size: 12px; }
+            .signature { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }
+            .school-name { color: #4F46E5; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h2>Thank You for Contacting Us!</h2>
+            </div>
+            <div class="content">
+              <p>Dear ${name},</p>
+              
+              <p>Thank you for reaching out to <span class="school-name">Minervaa Vidhya Mandhir School</span>. We have received your message and appreciate your interest in our institution.</p>
+              
+              <div class="message">
+                <p><strong>Your Message:</strong></p>
+                <p>${message.replace(/\n/g, '<br>')}</p>
+              </div>
+              
+              <p>Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.</p>
+              
+              <p>In the meantime, you can:</p>
+              <ul>
+                <li>Visit our website to learn more about our programs</li>
+                <li>Follow us on social media for updates and events</li>
+                <li>Call us directly at +91-9994959484 for urgent inquiries</li>
+              </ul>
+              
+              <div class="signature">
+                <p>Warm regards,<br>
+                <strong>Admissions Office</strong><br>
+                <span class="school-name">Minervaa Vidhya Mandhir School</span><br>
+                Pollachi, Tamil Nadu</p>
+              </div>
+            </div>
+            <div class="footer">
+              <p>© ${new Date().getFullYear()} Minervaa Vidhya Mandhir School. All rights reserved.</p>
+              <p>2X9+75Q, Jothi Nagar, Pollachi, Tamil Nadu 642001</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `
+        Thank You for Contacting Minervaa Vidhya Mandhir School
+        
+        Dear ${name},
+        
+        Thank you for reaching out to Minervaa Vidhya Mandhir School. We have received your message and appreciate your interest in our institution.
+        
+        Your Message:
+        ${message}
+        
+        Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.
+        
+        In the meantime, you can:
+        - Visit our website to learn more about our programs
+        - Follow us on social media for updates and events
+        - Call us directly at +91-9994959484 for urgent inquiries
+        
+        Warm regards,
+        Admissions Office
+        Minervaa Vidhya Mandhir School
+        Pollachi, Tamil Nadu
+      `
+    };
+    
+    // Send email to admin
     await transporter.sendMail(adminMailOptions);
     console.log(`✅ Contact form admin notification sent for ${name}`);
+    
+    // Send auto-reply to user
+    await transporter.sendMail(userMailOptions);
+    console.log(`✅ Contact form auto-reply sent to ${email}`);
     
     // Success response
     res.status(200).json({ 
@@ -536,8 +619,6 @@ app.post('/api/contact', async (req, res) => {
     });
   }
 });
-
-// Admission form submission endpoint
 app.post('/api/admission', upload.single('photo'), async (req, res) => {
   try {
     const formData = req.body;
@@ -555,94 +636,171 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
       });
     }
     
-    // Generate PDF
-    const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
+    // Prepare email content
+    const emailSubject = `New Admission Enquiry - ${formData.childName}`;
     
-    // Prepare email options
-    const mailOptions = {
-      from: '"Minervaa School Admissions" <roobankr6@gmail.com>',
-      to: 'suryareigns18@gmail.com',
-      subject: `New Admission Enquiry - ${formData.childName}`,
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
-            .content { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 10px 10px; }
-            .field { margin-bottom: 10px; padding: 10px; background: white; border-radius: 5px; }
-            .label { font-weight: bold; color: #4F46E5; }
-            .value { color: #333; margin-left: 10px; }
-            .footer { margin-top: 20px; text-align: center; color: #777; font-size: 12px; }
-            .highlight { background: #4F46E5; color: white; padding: 3px 10px; border-radius: 15px; display: inline-block; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h2>New Admission Enquiry</h2>
+    // Create a formatted HTML email body with all form details
+    const emailBody = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 10px 10px; }
+          .field { margin-bottom: 10px; padding: 10px; background: white; border-radius: 5px; }
+          .label { font-weight: bold; color: #4F46E5; }
+          .value { color: #333; margin-left: 10px; }
+          .section-title { color: #4F46E5; font-size: 18px; margin: 20px 0 10px 0; border-bottom: 2px solid #4F46E5; padding-bottom: 5px; }
+          .footer { margin-top: 20px; text-align: center; color: #777; font-size: 12px; }
+          .photo-preview { max-width: 200px; max-height: 200px; margin: 10px auto; display: block; border-radius: 10px; border: 3px solid #4F46E5; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>🏫 New Admission Enquiry</h2>
+            <p>Minervaa Vidhya Mandhir School</p>
+          </div>
+          <div class="content">
+            <div class="section-title">Student Information</div>
+            <div class="field">
+              <span class="label">Student Name:</span>
+              <span class="value">${formData.childName}</span>
             </div>
-            <div class="content">
-              <div class="field">
-                <span class="label">Student Name:</span>
-                <span class="value">${formData.childName}</span>
-              </div>
-              <div class="field">
-                <span class="label">Class Applying for:</span>
-                <span class="value">${formData.classAdmission}</span>
-              </div>
-              <div class="field">
-                <span class="label">Contact Number:</span>
-                <span class="value">${formData.contactNumber}</span>
-              </div>
-              <div class="field">
-                <span class="label">Date of Birth:</span>
-                <span class="value">${formData.dateOfBirth}</span>
-              </div>
-              <hr style="border: 1px solid #4F46E5; margin: 20px 0;">
-              <p style="text-align: center;">
-                <span class="highlight">Complete admission form attached as PDF</span>
+            <div class="field">
+              <span class="label">Date of Birth:</span>
+              <span class="value">${formData.dateOfBirth}</span>
+            </div>
+            <div class="field">
+              <span class="label">Gender:</span>
+              <span class="value">${formData.sex}</span>
+            </div>
+            
+            <div class="section-title">Contact Information</div>
+            <div class="field">
+              <span class="label">Contact Type:</span>
+              <span class="value">${formData.contactType}</span>
+            </div>
+            <div class="field">
+              <span class="label">Contact Number:</span>
+              <span class="value">${formData.contactNumber}</span>
+            </div>
+            ${formData.alternateNumber ? `
+            <div class="field">
+              <span class="label">Alternate Number:</span>
+              <span class="value">${formData.alternateNumber}</span>
+            </div>
+            ` : ''}
+            ${formData.email ? `
+            <div class="field">
+              <span class="label">Email:</span>
+              <span class="value">${formData.email}</span>
+            </div>
+            ` : ''}
+            
+            <div class="section-title">Admission Details</div>
+            <div class="field">
+              <span class="label">Class Applying for:</span>
+              <span class="value">${formData.classAdmission}</span>
+            </div>
+            <div class="field">
+              <span class="label">TC Attached:</span>
+              <span class="value">${formData.tcAttached}</span>
+            </div>
+            
+            <div class="section-title">Additional Information</div>
+            <div class="field">
+              <span class="label">How did you know about us:</span>
+              <span class="value">${formData.howKnow}</span>
+            </div>
+            ${formData.referenceName ? `
+            <div class="field">
+              <span class="label">Reference Name:</span>
+              <span class="value">${formData.referenceName}</span>
+            </div>
+            ` : ''}
+            ${formData.address ? `
+            <div class="field">
+              <span class="label">Address:</span>
+              <span class="value">${formData.address}</span>
+            </div>
+            ` : ''}
+            
+            <hr style="border: 1px solid #4F46E5; margin: 20px 0;">
+            
+            ${photoFile ? `
+            <div style="text-align: center;">
+              <p style="background: #e8f4fd; padding: 10px; border-radius: 5px;">
+                <strong>📸 Student Photo is attached with this email</strong>
+              </p>
+              <p style="font-size: 14px; color: #666;">
+                Photo filename: ${photoFile.originalname}<br>
+                File size: ${(photoFile.size / 1024).toFixed(2)} KB
               </p>
             </div>
-            <div class="footer">
-              <p>This is an automated message from Minervaa Vidhya Mandhir School</p>
-              <p>© ${new Date().getFullYear()} Minervaa Vidhya Mandhir School. All rights reserved.</p>
-            </div>
+            ` : `
+            <p style="text-align: center; background: #fff3cd; padding: 10px; border-radius: 5px;">
+              <strong>📸 No photo was uploaded</strong>
+            </p>
+            `}
+            
+            <p style="font-size: 14px; color: #666; text-align: center;">
+              <strong>Submitted on:</strong> ${new Date().toLocaleString()}
+            </p>
           </div>
-        </body>
-        </html>
-      `,
-      attachments: [
-        {
-          filename: `Admission_Form_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf'
-        }
-      ]
-    };
+          <div class="footer">
+            <p>This is an automated message from Minervaa Vidhya Mandhir School</p>
+            <p>© ${new Date().getFullYear()} Minervaa Vidhya Mandhir School. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Prepare attachments array
+    const attachments = [];
     
     // Add photo as attachment if available
     if (photoFile) {
-      mailOptions.attachments.push({
-        filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}${path.extname(photoFile.originalname)}`,
+      // Get file extension
+      const fileExtension = photoFile.originalname.split('.').pop();
+      attachments.push({
+        filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.${fileExtension}`,
         content: photoFile.buffer,
-        contentType: photoFile.mimetype,
-        cid: 'studentphoto' // Content ID for embedding in email if needed
+        contentType: photoFile.mimetype
       });
     }
-    
-    // Send email
-    await transporter.sendMail(mailOptions);
-    
-    console.log(`✅ Admission form email sent successfully for ${formData.childName}`);
-    
-    // Success response
-    res.status(200).json({ 
-      success: true, 
-      message: 'Admission enquiry submitted successfully. We will contact you soon!' 
+
+    // Send email using your email utility with attachments
+    const emailResult = await sendEmail({
+      receiverEmails: 'roobankr6@gmail.com',
+      subject: emailSubject,
+      body: emailBody,
+      attachments: attachments // Add attachments to the email
     });
+
+    if (emailResult.success) {
+      console.log(`✅ Admission form email sent successfully to roobankr6@gmail.com for ${formData.childName}`);
+      if (photoFile) {
+        console.log(`📸 Photo attached: ${photoFile.originalname}`);
+      }
+      
+      res.status(200).json({ 
+        success: true, 
+        message: 'Admission enquiry submitted successfully. We will contact you soon!' 
+      });
+    } else {
+      console.error('❌ Failed to send email:', emailResult.error);
+      
+      // Still return success to user but log the email failure
+      res.status(200).json({ 
+        success: true, 
+        message: 'Admission enquiry submitted successfully. We will contact you soon!',
+        warning: 'Email notification failed but your enquiry was received.'
+      });
+    }
     
   } catch (error) {
     console.error('❌ Error processing admission form:', error);
