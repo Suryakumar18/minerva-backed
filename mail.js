@@ -2,12 +2,22 @@ const nodemailer = require("nodemailer");
 const validator = require("validator");
 require("dotenv").config();
 
+// Create transporter using environment variables
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.NODEMAILER_FORM_EMAIL,
     pass: process.env.NODEMAILER_FORM_EMAIL_PASSWORD,
   },
+});
+
+// Verify transporter on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('❌ Email transporter verification failed:', error);
+  } else {
+    console.log('✅ Email transporter is ready');
+  }
 });
 
 const sendEmail = async (...args) => {
@@ -22,11 +32,11 @@ const sendEmail = async (...args) => {
       emailSubject = emailData.subject || emailData.emailSubject;
       emailBody = emailData.body || emailData.emailBody;
       ccEmails = emailData.ccEmails || [];
-      attachments = emailData.attachments || []; // Add this line
+      attachments = emailData.attachments || [];
     } else {
       // Parameter format
       [receiverEmails, emailSubject, emailBody, ccEmails = []] = args;
-      attachments = []; // Default empty attachments
+      attachments = [];
     }
 
     // Validate receiverEmails
@@ -39,26 +49,29 @@ const sendEmail = async (...args) => {
     }
 
     const mailOptions = {
-      from: process.env.NODEMAILER_FORM_EMAIL,
+      from: `"Minervaa School" <${process.env.NODEMAILER_FORM_EMAIL}>`,
       to: receiverEmails,
       cc: ccEmails,
       subject: emailSubject,
       html: emailBody,
-      attachments: attachments // Add attachments to mailOptions
+      attachments: attachments
     };
 
-    await transporter.sendMail(mailOptions);
-    console.log("Email sent successfully to:", receiverEmails);
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ Email sent successfully to:", receiverEmails);
+    console.log("📧 Message ID:", info.messageId);
+    
     if (attachments.length > 0) {
       console.log(`📎 ${attachments.length} attachment(s) included`);
     }
 
     return {
       success: true,
-      message: "Email sent successfully"
+      message: "Email sent successfully",
+      messageId: info.messageId
     };
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error("❌ Error sending email:", error);
     return {
       success: false,
       error: error.message || "Failed to send email"
