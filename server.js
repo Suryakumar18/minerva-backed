@@ -8,7 +8,10 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs-extra');
 const path = require('path');
-const { sendEmail } = require('./mail');
+require('dotenv').config(); // Make sure dotenv is loaded at the top
+
+// IMPORTANT: Import your email utility
+const { sendEmail } = require('./mail'); // Make sure this path is correct
 
 const app = express();
 
@@ -16,11 +19,19 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
-// CORS configuration
+// CORS configuration - update with your frontend URLs
 app.use(cors({
-  origin: ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174','https://minevera-school-frontend.vercel.app'], // Add your frontend URLs
+  origin: [
+    'http://localhost:3001', 
+    'http://localhost:5173', 
+    'http://localhost:5174',
+    'https://your-frontend-domain.vercel.app', // Add your Vercel frontend URL
+    'https://minervaa-school.vercel.app' // Example - update with your actual URL
+  ],
   credentials: true
 }));
 
@@ -28,13 +39,11 @@ app.use(cors({
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 50, // limit each IP to 50 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
   keyGenerator: (req) => {
-    // Custom key generator that works with proxy
     return req.ip || req.connection.remoteAddress;
   },
-  // Skip rate limiting for health checks
   skip: (req) => {
     return req.path === '/health';
   }
@@ -69,25 +78,6 @@ const upload = multer({
   }
 });
 
-// Create email transporter with hardcoded credentials
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // true for 465, false for other ports
-  auth: {
-    user: 'roobankr6@gmail.com',
-    pass: 'jvjkdwuhtmgvlldf'
-  }
-});
-
-// Verify email connection
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('Email configuration error:', error);
-  } else {
-    console.log('✅ Email server is ready to send messages');
-  }
-});
 
 // Helper function to create styled tables in PDF
 const createStyledTable = (doc, headers, data, startY, columnWidths) => {
@@ -421,7 +411,6 @@ const generatePDF = async (formData, photoBuffer) => {
     }
   });
 };
-
 // Contact form submission endpoint
 app.post('/api/contact', async (req, res) => {
   try {
@@ -446,10 +435,9 @@ app.post('/api/contact', async (req, res) => {
     
     // Prepare email options for admin notification
     const adminMailOptions = {
-      from: '"Minervaa School Website" <roobankr6@gmail.com>',
-      to: 'suryareigns18@gmail.com',
+      receiverEmails: process.env.ADMIN_EMAIL || 'suryareigns18@gmail.com', // Use env var or fallback
       subject: `New Contact Form Message - ${name}`,
-      html: `
+      body: `
         <!DOCTYPE html>
         <html>
         <head>
@@ -498,28 +486,14 @@ app.post('/api/contact', async (req, res) => {
           </div>
         </body>
         </html>
-      `,
-      // Plain text version for email clients that don't support HTML
-      text: `
-        New Contact Form Message
-        
-        Name: ${name}
-        Email: ${email}
-        Phone: ${phone}
-        
-        Message:
-        ${message}
-        
-        This message was sent from the contact form on the Minervaa Vidhya Mandhir School website.
       `
     };
     
     // Prepare auto-reply email for the user
     const userMailOptions = {
-      from: '"Minervaa Vidhya Mandhir School" <roobankr6@gmail.com>',
-      to: email,
+      receiverEmails: email,
       subject: 'Thank You for Contacting Minervaa Vidhya Mandhir School',
-      html: `
+      body: `
         <!DOCTYPE html>
         <html>
         <head>
@@ -551,13 +525,6 @@ app.post('/api/contact', async (req, res) => {
               
               <p>Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.</p>
               
-              <p>In the meantime, you can:</p>
-              <ul>
-                <li>Visit our website to learn more about our programs</li>
-                <li>Follow us on social media for updates and events</li>
-                <li>Call us directly at +91-9994959484 for urgent inquiries</li>
-              </ul>
-              
               <div class="signature">
                 <p>Warm regards,<br>
                 <strong>Admissions Office</strong><br>
@@ -567,58 +534,48 @@ app.post('/api/contact', async (req, res) => {
             </div>
             <div class="footer">
               <p>© ${new Date().getFullYear()} Minervaa Vidhya Mandhir School. All rights reserved.</p>
-              <p>2X9+75Q, Jothi Nagar, Pollachi, Tamil Nadu 642001</p>
             </div>
           </div>
         </body>
         </html>
-      `,
-      text: `
-        Thank You for Contacting Minervaa Vidhya Mandhir School
-        
-        Dear ${name},
-        
-        Thank you for reaching out to Minervaa Vidhya Mandhir School. We have received your message and appreciate your interest in our institution.
-        
-        Your Message:
-        ${message}
-        
-        Our team will review your inquiry and get back to you as soon as possible. Typically, we respond within 24-48 hours during business days.
-        
-        In the meantime, you can:
-        - Visit our website to learn more about our programs
-        - Follow us on social media for updates and events
-        - Call us directly at +91-9994959484 for urgent inquiries
-        
-        Warm regards,
-        Admissions Office
-        Minervaa Vidhya Mandhir School
-        Pollachi, Tamil Nadu
       `
     };
     
-    // Send email to admin
-    await transporter.sendMail(adminMailOptions);
-    console.log(`✅ Contact form admin notification sent for ${name}`);
+    // Send email to admin using your email utility
+    const adminResult = await sendEmail(adminMailOptions);
+    
+    if (!adminResult.success) {
+      console.error('Failed to send admin email:', adminResult.error);
+      // Still try to send user email
+    }
     
     // Send auto-reply to user
-    await transporter.sendMail(userMailOptions);
-    console.log(`✅ Contact form auto-reply sent to ${email}`);
+    const userResult = await sendEmail(userMailOptions);
     
-    // Success response
-    res.status(200).json({ 
-      success: true, 
-      message: 'Your message has been sent successfully. We will contact you soon!' 
-    });
+    if (adminResult.success && userResult.success) {
+      console.log(`✅ Contact form emails sent successfully for ${name}`);
+      res.status(200).json({ 
+        success: true, 
+        message: 'Your message has been sent successfully. We will contact you soon!' 
+      });
+    } else {
+      // Partial success
+      res.status(200).json({ 
+        success: true, 
+        message: 'Your message has been received. We will contact you soon!',
+        warning: 'Email notification partially failed but your enquiry was received.'
+      });
+    }
     
   } catch (error) {
     console.error('❌ Error processing contact form:', error);
-    
     res.status(500).json({ 
       error: 'Failed to send your message. Please try again or contact us directly by phone.' 
     });
   }
 });
+
+// Admission form submission endpoint
 app.post('/api/admission', upload.single('photo'), async (req, res) => {
   try {
     const formData = req.body;
@@ -636,10 +593,13 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
       });
     }
     
+    // Generate PDF (if you have this function)
+    // const pdfBuffer = await generatePDF(formData, photoFile?.buffer);
+    
     // Prepare email content
     const emailSubject = `New Admission Enquiry - ${formData.childName}`;
     
-    // Create a formatted HTML email body with all form details
+    // Create a formatted HTML email body
     const emailBody = `
       <!DOCTYPE html>
       <html>
@@ -654,7 +614,6 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
           .value { color: #333; margin-left: 10px; }
           .section-title { color: #4F46E5; font-size: 18px; margin: 20px 0 10px 0; border-bottom: 2px solid #4F46E5; padding-bottom: 5px; }
           .footer { margin-top: 20px; text-align: center; color: #777; font-size: 12px; }
-          .photo-preview { max-width: 200px; max-height: 200px; margin: 10px auto; display: block; border-radius: 10px; border: 3px solid #4F46E5; }
         </style>
       </head>
       <body>
@@ -710,36 +669,13 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
               <span class="value">${formData.tcAttached}</span>
             </div>
             
-            <div class="section-title">Additional Information</div>
-            <div class="field">
-              <span class="label">How did you know about us:</span>
-              <span class="value">${formData.howKnow}</span>
-            </div>
-            ${formData.referenceName ? `
-            <div class="field">
-              <span class="label">Reference Name:</span>
-              <span class="value">${formData.referenceName}</span>
-            </div>
-            ` : ''}
-            ${formData.address ? `
-            <div class="field">
-              <span class="label">Address:</span>
-              <span class="value">${formData.address}</span>
-            </div>
-            ` : ''}
-            
             <hr style="border: 1px solid #4F46E5; margin: 20px 0;">
             
             ${photoFile ? `
-            <div style="text-align: center;">
-              <p style="background: #e8f4fd; padding: 10px; border-radius: 5px;">
-                <strong>📸 Student Photo is attached with this email</strong>
-              </p>
-              <p style="font-size: 14px; color: #666;">
-                Photo filename: ${photoFile.originalname}<br>
-                File size: ${(photoFile.size / 1024).toFixed(2)} KB
-              </p>
-            </div>
+            <p style="text-align: center; background: #e8f4fd; padding: 10px; border-radius: 5px;">
+              <strong>📸 Student Photo is attached with this email</strong><br>
+              <span style="font-size: 12px;">${photoFile.originalname} (${(photoFile.size / 1024).toFixed(2)} KB)</span>
+            </p>
             ` : `
             <p style="text-align: center; background: #fff3cd; padding: 10px; border-radius: 5px;">
               <strong>📸 No photo was uploaded</strong>
@@ -764,7 +700,6 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     
     // Add photo as attachment if available
     if (photoFile) {
-      // Get file extension
       const fileExtension = photoFile.originalname.split('.').pop();
       attachments.push({
         filename: `Student_Photo_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.${fileExtension}`,
@@ -773,16 +708,25 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
       });
     }
 
-    // Send email using your email utility with attachments
+    // If you have PDF generation, add it as attachment
+    // if (pdfBuffer) {
+    //   attachments.push({
+    //     filename: `Admission_Form_${formData.childName.replace(/\s+/g, '_')}_${Date.now()}.pdf`,
+    //     content: pdfBuffer,
+    //     contentType: 'application/pdf'
+    //   });
+    // }
+
+    // Send email using your email utility
     const emailResult = await sendEmail({
-      receiverEmails: 'roobankr6@gmail.com',
+      receiverEmails: process.env.ADMIN_EMAIL || 'roobankr6@gmail.com', // Use env var or fallback
       subject: emailSubject,
       body: emailBody,
-      attachments: attachments // Add attachments to the email
+      attachments: attachments
     });
 
     if (emailResult.success) {
-      console.log(`✅ Admission form email sent successfully to roobankr6@gmail.com for ${formData.childName}`);
+      console.log(`✅ Admission form email sent successfully for ${formData.childName}`);
       if (photoFile) {
         console.log(`📸 Photo attached: ${photoFile.originalname}`);
       }
@@ -804,7 +748,6 @@ app.post('/api/admission', upload.single('photo'), async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error processing admission form:', error);
-    
     res.status(500).json({ 
       error: 'Failed to process admission form. Please try again or contact us directly.' 
     });
@@ -816,7 +759,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
     message: 'Server is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -841,12 +785,12 @@ app.use((req, res) => {
 });
 
 // Start server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log('🚀 ==================================');
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📧 Email configured for: roobankr6@gmail.com`);
-  console.log(`📨 Sending to: suryareigns18@gmail.com`);
+  console.log(`📧 Email configured for: ${process.env.NODEMAILER_FORM_EMAIL}`);
+  console.log(`📨 Sending to admin: ${process.env.ADMIN_EMAIL || 'roobankr6@gmail.com'}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('🚀 ==================================');
 });
-
