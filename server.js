@@ -20,7 +20,7 @@ app.use(helmet());
 
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174'], // Add your frontend URLs
+  origin: ['http://localhost:3001', 'http://localhost:5173', 'http://localhost:5174','https://minevera-school-frontend.vercel.app'], // Add your frontend URLs
   credentials: true
 }));
 
@@ -849,3 +849,4 @@ app.listen(PORT, () => {
   console.log(`📨 Sending to: suryareigns18@gmail.com`);
   console.log('🚀 ==================================');
 });
+
