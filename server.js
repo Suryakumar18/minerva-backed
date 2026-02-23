@@ -29,7 +29,7 @@ app.use(cors({
     'http://localhost:3001', 
     'http://localhost:5173', 
     'http://localhost:5174',
-    'https://your-frontend-domain.vercel.app', // Add your Vercel frontend URL
+    'https://minevera-school-frontend.vercel.app', // Add your Vercel frontend URL
     'https://minervaa-school.vercel.app' // Example - update with your actual URL
   ],
   credentials: true
@@ -794,3 +794,4 @@ app.listen(PORT, () => {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('🚀 ==================================');
 });
+
